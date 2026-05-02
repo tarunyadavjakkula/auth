@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -80,9 +79,17 @@ func (a *Auth) GenerateRefreshToken(userID string) (string, error) {
 		INSERT INTO refresh_tokens (token, user_id, expires_at, revoked, created_at)
 		VALUES ($1, $2, $3, false, NOW())
 	`
-	_, err := a.Conn.Exec(context.Background(), query, token, userID, expiresAt)
+	_, err := a.Conn.Exec(a.ctx, query, token, userID, expiresAt)
 	if err != nil {
 		return "", fmt.Errorf("%w: failed to store refresh token: %v", ErrDatabaseUnavailable, err)
+	}
+
+	if a.redisClient != nil {
+		pipe := a.redisClient.Pipeline()
+		pipe.Set(a.ctx, "refresh:"+token, userID, a.refreshTokenExpiry)
+		pipe.SAdd(a.ctx, "user_tokens:"+userID, token)
+		pipe.Expire(a.ctx, "user_tokens:"+userID, a.refreshTokenExpiry)
+		_, _ = pipe.Exec(a.ctx)
 	}
 
 	return token, nil
@@ -100,25 +107,51 @@ func (a *Auth) ValidateRefreshToken(token string) (string, error) {
 		return "", ErrDatabaseUnavailable
 	}
 
-	var userID string
-	var expiresAt time.Time
-	var revoked bool
+	if a.redisClient != nil {
+		cachedUser, err := a.redisClient.Get(a.ctx, "refresh:"+token).Result()
+		if err == nil {
+			return cachedUser, nil
+		}
+	}
 
-	query := "SELECT user_id, expires_at, revoked FROM refresh_tokens WHERE token = $1"
-	err := a.Conn.QueryRow(context.Background(), query, token).Scan(&userID, &expiresAt, &revoked)
+	val, err, _ := a.requestGroup.Do("validate_refresh:"+token, func() (interface{}, error) {
+		var userID string
+		var expiresAt time.Time
+		var revoked bool
+
+		query := "SELECT user_id, expires_at, revoked FROM refresh_tokens WHERE token = $1"
+		err := a.Conn.QueryRow(a.ctx, query, token).Scan(&userID, &expiresAt, &revoked)
+		if err != nil {
+			return "", ErrRefreshTokenInvalid
+		}
+
+		if revoked {
+			return "", ErrRefreshTokenRevoked
+		}
+
+		if time.Now().After(expiresAt) {
+			return "", ErrRefreshTokenExpired
+		}
+
+		if a.redisClient != nil {
+			ttl := time.Until(expiresAt)
+			if ttl > 0 {
+				pipe := a.redisClient.Pipeline()
+				pipe.Set(a.ctx, "refresh:"+token, userID, ttl)
+				pipe.SAdd(a.ctx, "user_tokens:"+userID, token)
+				pipe.Expire(a.ctx, "user_tokens:"+userID, a.refreshTokenExpiry)
+				_, _ = pipe.Exec(a.ctx)
+			}
+		}
+
+		return userID, nil
+	})
+
 	if err != nil {
-		return "", ErrRefreshTokenInvalid
+		return "", err
 	}
 
-	if revoked {
-		return "", ErrRefreshTokenRevoked
-	}
-
-	if time.Now().After(expiresAt) {
-		return "", ErrRefreshTokenExpired
-	}
-
-	return userID, nil
+	return val.(string), nil
 }
 
 /*
@@ -161,7 +194,7 @@ func (a *Auth) RevokeRefreshToken(token string) error {
 		return ErrDatabaseUnavailable
 	}
 
-	cmdTag, err := a.Conn.Exec(context.Background(),
+	cmdTag, err := a.Conn.Exec(a.ctx,
 		"UPDATE refresh_tokens SET revoked = true WHERE token = $1",
 		token,
 	)
@@ -170,6 +203,10 @@ func (a *Auth) RevokeRefreshToken(token string) error {
 	}
 	if cmdTag.RowsAffected() == 0 {
 		return ErrRefreshTokenInvalid
+	}
+
+	if a.redisClient != nil {
+		a.redisClient.Del(a.ctx, "refresh:"+token)
 	}
 
 	return nil
@@ -187,7 +224,21 @@ func (a *Auth) RevokeAllUserRefreshTokens(userID string) error {
 		return ErrDatabaseUnavailable
 	}
 
-	_, err := a.Conn.Exec(context.Background(),
+	if a.redisClient != nil {
+		tokens, err := a.redisClient.SMembers(a.ctx, "user_tokens:"+userID).Result()
+		if err == nil && len(tokens) > 0 {
+			keys := make([]string, len(tokens))
+			for i, t := range tokens {
+				keys[i] = "refresh:" + t
+			}
+			pipe := a.redisClient.Pipeline()
+			pipe.Del(a.ctx, keys...)
+			pipe.Del(a.ctx, "user_tokens:"+userID)
+			_, _ = pipe.Exec(a.ctx)
+		}
+	}
+
+	_, err := a.Conn.Exec(a.ctx,
 		"UPDATE refresh_tokens SET revoked = true WHERE user_id = $1",
 		userID,
 	)
@@ -207,7 +258,7 @@ func (a *Auth) CleanupExpiredRefreshTokens() error {
 		return ErrDatabaseUnavailable
 	}
 
-	_, err := a.Conn.Exec(context.Background(),
+	_, err := a.Conn.Exec(a.ctx,
 		"DELETE FROM refresh_tokens WHERE expires_at < NOW()",
 	)
 	if err != nil {

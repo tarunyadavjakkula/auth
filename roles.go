@@ -1,15 +1,12 @@
 package auth
 
-import (
-	"context"
-)
-
+// CreateRole registers a new role in the system.
 func (a *Auth) CreateRole(name string) error {
 	if a.Conn == nil {
 		return ErrNotInitialized
 	}
 
-	_, err := a.Conn.Exec(context.Background(),
+	_, err := a.Conn.Exec(a.ctx,
 		"INSERT INTO roles(role) VALUES ($1)",
 		name,
 	)
@@ -27,7 +24,7 @@ func (a *Auth) DeleteRole(name string) error {
 	}
 
 	_, err := a.Conn.Exec(
-		context.Background(),
+		a.ctx,
 		"DELETE FROM roles WHERE role = $1",
 		name,
 	)

@@ -1,16 +1,13 @@
 package auth
 
-import (
-	"context"
-)
-
+// CreatePermissions assigns a role to a user within a specific space.
 func (a *Auth) CreatePermissions(username, spaceName, role string) error {
 	if a.Conn == nil {
 		return ErrNotInitialized
 	}
 
 	_, err := a.Conn.Exec(
-		context.Background(),
+		a.ctx,
 		"INSERT INTO permissions(user_id, spaceName, role) VALUES ($1, $2, $3)",
 		username, spaceName, role,
 	)
@@ -38,7 +35,7 @@ func (a *Auth) CheckPermissions(username, spaceName, role string) error {
 		)
 	`
 
-	err := a.Conn.QueryRow(context.Background(), query, username, spaceName, role).Scan(&exists)
+	err := a.Conn.QueryRow(a.ctx, query, username, spaceName, role).Scan(&exists)
 	if err != nil {
 		return ErrDatabaseUnavailable
 	}
@@ -62,7 +59,7 @@ func (a *Auth) DeletePermission(username, spaceName, role string) error {
 		AND role = $3
 	`
 
-	_, err := a.Conn.Exec(context.Background(), query, username, spaceName, role)
+	_, err := a.Conn.Exec(a.ctx, query, username, spaceName, role)
 
 	if err != nil {
 		return err

@@ -1,15 +1,12 @@
 package auth
 
-import (
-	"context"
-)
-
+// CreateSpace initializes a new organizational space with a specific authority level.
 func (a *Auth) CreateSpace(name string, authority int) error {
 	if a.Conn == nil {
 		return ErrNotInitialized
 	}
 
-	_, err := a.Conn.Exec(context.Background(),
+	_, err := a.Conn.Exec(a.ctx,
 		"INSERT INTO spaces(spaceName, authority) VALUES ($1, $2)",
 		name, authority,
 	)
@@ -27,7 +24,7 @@ func (a *Auth) DeleteSpace(name string) error {
 	}
 
 	_, err := a.Conn.Exec(
-		context.Background(),
+		a.ctx,
 		"DELETE FROM spaces WHERE spaceName = $1",
 		name,
 	)
