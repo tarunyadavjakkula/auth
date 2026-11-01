@@ -166,3 +166,26 @@ jobs:
           TEST_DB_PORT: 5432
         # -race requires CGO which is unreliable on windows-latest runners.
         run: go test -v ./...
+
+      # ── Non-UTC time zone tests ────────────────────────────────────────────
+      # OTP and refresh-token expiry must not depend on the host's time zone.
+      # AUTH_TEST_TZ moves the test process into the given zone (Go ignores TZ
+      # on Windows) and TestTimezoneProcessZone fails if it did not take effect.
+      - name: Run Expiry Tests (non-UTC time zones)
+        shell: bash
+        env:
+          TEST_DB_USER: testuser
+          TEST_DB_PASS: testpass
+          TEST_DB_NAME: testauth
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: 5432
+        run: |
+          status=0
+          for tz in Asia/Kolkata America/Los_Angeles Pacific/Kiritimati; do
+            echo "::group::AUTH_TEST_TZ=$tz"
+            AUTH_TEST_TZ="$tz" go test -v -count=1 \
+              -run 'TestTimezone|TestIntegration(Timezone|OTP|ListActiveOTPs|RefreshToken|JWTRefreshToken)|TestRefreshToken|TestRevokeAllUserRefreshTokens' \
+              ./tests/ || status=1
+            echo "::endgroup::"
+          done
+          exit $status
