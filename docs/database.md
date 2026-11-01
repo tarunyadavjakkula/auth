@@ -69,13 +69,13 @@ func (a *Auth) createOTPs(ctx context.Context) error {
         CREATE TABLE IF NOT EXISTS otps (
             email TEXT PRIMARY KEY,
             code TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL
+            expires_at TIMESTAMPTZ NOT NULL
         )`
     _, err := a.Conn.Exec(ctx, query)
     ...
 }
 ```
- Each row stores an email, the OTP code, and timestamp after which the code should no longer be accepted.
+ Each row stores an email, the OTP code, and timestamp after which the code should no longer be accepted. The timestamp is a `TIMESTAMPTZ` (not a plain `TIMESTAMP`), so it is an exact moment in time that means the same thing on a server in any time zone. The same goes for `expires_at` in the `refresh_tokens` table.
 
 ```go
 func (a *Auth) checkSpaces(ctx context.Context) error {
@@ -146,6 +146,21 @@ func (a *Auth) checkOTPs(ctx context.Context) error {
 }
 ```
 it checks the data type and nullability of email, code, and expires_at.
+
+```go
+func (p *PostgresStorage) checkExpiryColumns(ctx context.Context) error {
+    query := `
+        SELECT table_name, data_type
+        FROM information_schema.columns
+        WHERE table_name IN ('otps', 'refresh_tokens')
+        AND column_name = 'expires_at'
+    `
+    rows, err := p.pool.Query(ctx, query)
+    ...
+}
+```
+checkExpiryColumns runs at the end of CheckTables. It reads the data type of `expires_at` in the otps and refresh_tokens tables, and if either one is still a plain `timestamp` it returns `ErrSchemaOutdated` instead of letting the library run on the old schema. This is needed because `CREATE TABLE IF NOT EXISTS` silently leaves an old table as it is. The fix is the script in the `migrations` folder (check migrations.md).
+
 ```go
 func (a *Auth) tableExists(ctx context.Context, table string) (bool, error) {
     var exists bool
@@ -215,4 +230,4 @@ func dbConnect(ctx context.Context, details *dbDetails) (*pgxpool.Pool, error) {
     return pool, nil
 }
 ```
-dbConnect builds a URL using net/url instead of string concatenation.After constructing urlStr, the function creates a pgxpool.then immediately runs a SELECT 1 check: if that query fails, it closes the pool and returns an error so we know the db is not reachable yet. If success,it logs that the connection pool is ready and returns it for the auth package to use.
+dbConnect builds a URL using net/url instead of string concatenation.After constructing urlStr, the function creates a pgxpool.then immediately runs a SELECT 1 check: if that query fails, it closes the pool and returns an error so we know the db is not reachable yet. If success,it logs that the connection pool is ready and returns it for the auth package to use. The pool is also configured so that every connection runs with its `TimeZone` set to `UTC`, which keeps `NOW()` in the cleanup queries independent of the server's own time zone.

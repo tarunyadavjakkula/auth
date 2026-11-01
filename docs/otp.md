@@ -17,7 +17,7 @@ Why it’s used: Access Control & Attack Prevention
 The Gatekeeper: This is the actual "lock" on the door. It ensures that only users with the correct, current code can proceed.
 Expiration Enforcement: It checks the timestamp to ensure security. An OTP shouldn't be valid forever; if a hacker finds an old email from three days ago, this function ensures that code is useless.
 Anti-Replay (One-Time Use): It deletes the code immediately after a successful login. This is used so that a code cannot be intercepted and used a second time by someone else.
-How it works: When a code is generated in SendOTP, a timestamp is saved in the expires_at column (set to Current Time + 5 minutes).If the user attempts to verify even one second after the 5-minute mark, the function returns false and treats the code as non-existent, even if the 6-digit numbers match perfectly.
+How it works: When a code is generated in SendOTP, a UTC timestamp is saved in the expires_at column (a TIMESTAMPTZ, set to Current Time + 5 minutes), so the 5 minutes are the same on a server in any time zone.If the user attempts to verify even one second after the 5-minute mark, the function returns false and treats the code as non-existent, even if the 6-digit numbers match perfectly.
 
 **startOTPCleanup()**
 Why it’s used: Database Hygiene & Performance
