@@ -66,11 +66,11 @@ func (a *Auth) SendOTP(ctx context.Context, userEmail string) error {
 		return fmt.Errorf("failed to generate OTP: %w", err)
 	}
 
-	/* 2. Set Expiry (Uses the config field instead of hardcoded value) */
+	/* 2. Set Expiry in UTC (Uses the config field instead of hardcoded value) */
 	if a.otpExpiry <= 0 {
 		return fmt.Errorf("%w: duration %v", ErrInvalidInput, a.otpExpiry)
 	}
-	expiry := time.Now().Add(a.otpExpiry)
+	expiry := time.Now().UTC().Add(a.otpExpiry)
 
 	/* 3. Hash the OTP before storage — plaintext codes must never reach the database. */
 	hashedCode := a.computeOTPHash(code)

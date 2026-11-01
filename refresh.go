@@ -54,7 +54,8 @@ func (a *Auth) GenerateRefreshToken(ctx context.Context, userID string) (string,
 	}
 	token := hex.EncodeToString(tokenBytes)
 
-	expiresAt := time.Now().Add(a.refreshTokenExpiry)
+	/* Expiry is kept in UTC so it never depends on the host's time zone */
+	expiresAt := time.Now().UTC().Add(a.refreshTokenExpiry)
 
 	err := a.storage.InsertRefreshToken(ctx, token, userID, expiresAt)
 	if err != nil {

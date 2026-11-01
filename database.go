@@ -11,7 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-/* StorageEngine defines all database operations required by the Auth library. */
+/*
+StorageEngine defines all database operations required by the Auth library.
+Expiry times (OTPs and refresh tokens) are UTC instants: implementations must
+store them and return them in UTC.
+*/
 type StorageEngine interface {
 	CheckTables(ctx context.Context) error
 
@@ -70,7 +74,14 @@ func NewPostgresStorage(ctx context.Context, port uint16, dbUser, dbPass, dbName
 		Path:   dbName,
 	}
 
-	pool, err := pgxpool.New(ctx, u.String())
+	cfg, err := pgxpool.ParseConfig(u.String())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create connection pool: %w\nPlease configure Postgres correctly", err)
+	}
+	/* Pin every session to UTC so NOW() never depends on the server's time zone */
+	cfg.ConnConfig.RuntimeParams["timezone"] = "UTC"
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w\nPlease configure Postgres correctly", err)
 	}
@@ -91,7 +102,7 @@ func (p *PostgresStorage) Close() error {
 	return nil
 }
 
-/* CheckTables systematically creates all required tables if they do not exist. */
+/* CheckTables systematically creates all required tables if they do not exist, then verifies the expiry columns. */
 func (p *PostgresStorage) CheckTables(ctx context.Context) error {
 	query := `
 		CREATE TABLE IF NOT EXISTS spaces (
@@ -115,12 +126,12 @@ func (p *PostgresStorage) CheckTables(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS otps (
 			email TEXT PRIMARY KEY, 
 			code TEXT NOT NULL, 
-			expires_at TIMESTAMP NOT NULL
+			expires_at TIMESTAMPTZ NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY, 
 			user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE, 
-			expires_at TIMESTAMP NOT NULL, 
+			expires_at TIMESTAMPTZ NOT NULL, 
 			revoked BOOLEAN NOT NULL DEFAULT false, 
 			created_at TIMESTAMP NOT NULL DEFAULT NOW()
 		);
@@ -129,7 +140,36 @@ func (p *PostgresStorage) CheckTables(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize database schema: %w", err)
 	}
-	return nil
+	return p.checkExpiryColumns(ctx)
+}
+
+/*
+checkExpiryColumns returns ErrSchemaOutdated if an expiry column is still a plain TIMESTAMP.
+CREATE TABLE IF NOT EXISTS leaves old tables untouched, and their rows hold the host's
+local time, so the operator must convert them: run migrations/001_expiry_timestamptz.sql.
+*/
+func (p *PostgresStorage) checkExpiryColumns(ctx context.Context) error {
+	rows, err := p.pool.Query(ctx, `
+		SELECT table_name::text, data_type::text
+		FROM information_schema.columns
+		WHERE table_schema = current_schema()
+		  AND table_name IN ('otps', 'refresh_tokens')
+		  AND column_name = 'expires_at'`)
+	if err != nil {
+		return fmt.Errorf("failed to verify database schema: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var table, dataType string
+		if err := rows.Scan(&table, &dataType); err != nil {
+			return fmt.Errorf("failed to verify database schema: %w", err)
+		}
+		if dataType != "timestamp with time zone" {
+			return fmt.Errorf("%w: %s.expires_at is %q, expected \"timestamp with time zone\"; run migrations/001_expiry_timestamptz.sql", ErrSchemaOutdated, table, dataType)
+		}
+	}
+	return rows.Err()
 }
 
 /* Users */
@@ -251,13 +291,13 @@ func (p *PostgresStorage) DeletePermission(ctx context.Context, username, spaceN
 
 /* OTP */
 
-/* InsertOTP inserts or updates an OTP. */
+/* InsertOTP inserts or updates an OTP. The expiry is stored in UTC. */
 func (p *PostgresStorage) InsertOTP(ctx context.Context, email, code string, expiresAt time.Time) error {
-	_, err := p.pool.Exec(ctx, "INSERT INTO otps (email, code, expires_at) VALUES ($1, $2, $3) ON CONFLICT (email) DO UPDATE SET code = EXCLUDED.code, expires_at = EXCLUDED.expires_at", email, code, expiresAt)
+	_, err := p.pool.Exec(ctx, "INSERT INTO otps (email, code, expires_at) VALUES ($1, $2, $3) ON CONFLICT (email) DO UPDATE SET code = EXCLUDED.code, expires_at = EXCLUDED.expires_at", email, code, expiresAt.UTC())
 	return err
 }
 
-/* GetOTP retrieves an OTP. */
+/* GetOTP retrieves an OTP. The expiry is returned in UTC. */
 func (p *PostgresStorage) GetOTP(ctx context.Context, email string) (string, time.Time, error) {
 	var code string
 	var expiresAt time.Time
@@ -268,7 +308,7 @@ func (p *PostgresStorage) GetOTP(ctx context.Context, email string) (string, tim
 		}
 		return "", time.Time{}, err
 	}
-	return code, expiresAt, nil
+	return code, expiresAt.UTC(), nil
 }
 
 /* DeleteOTP deletes an OTP. */
@@ -304,19 +344,19 @@ func (p *PostgresStorage) CleanupExpiredOTPs(ctx context.Context) error {
 
 /* Refresh Tokens */
 
-/* InsertRefreshToken inserts a new refresh token. */
+/* InsertRefreshToken inserts a new refresh token. The expiry is stored in UTC. */
 func (p *PostgresStorage) InsertRefreshToken(ctx context.Context, token, userID string, expiresAt time.Time) error {
-	_, err := p.pool.Exec(ctx, "INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES ($1, $2, $3)", token, userID, expiresAt)
+	_, err := p.pool.Exec(ctx, "INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES ($1, $2, $3)", token, userID, expiresAt.UTC())
 	return err
 }
 
-/* GetRefreshToken retrieves a refresh token. */
+/* GetRefreshToken retrieves a refresh token. The expiry is returned in UTC. */
 func (p *PostgresStorage) GetRefreshToken(ctx context.Context, token string) (string, time.Time, bool, error) {
 	var userID string
 	var expiresAt time.Time
 	var revoked bool
 	err := p.pool.QueryRow(ctx, "SELECT user_id, expires_at, revoked FROM refresh_tokens WHERE token = $1", token).Scan(&userID, &expiresAt, &revoked)
-	return userID, expiresAt, revoked, err
+	return userID, expiresAt.UTC(), revoked, err
 }
 
 /* RevokeRefreshToken revokes a refresh token. */

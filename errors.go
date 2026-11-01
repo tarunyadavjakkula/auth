@@ -26,4 +26,5 @@ var (
 	ErrOAuthProfileFetchFailed = errors.New("failed to fetch user profile from provider")
 	ErrRedisUnavailable        = errors.New("redis connection unavailable")
 	ErrRateLimitBackendDown    = errors.New("rate limit backend is down")
+	ErrSchemaOutdated          = errors.New("database schema is outdated")
 )
