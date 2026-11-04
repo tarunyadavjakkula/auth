@@ -20,6 +20,13 @@ type RateLimiterConfig struct {
 	Window      time.Duration
 }
 
+// Limiter defines the operations supported by rate limiters.
+type Limiter interface {
+	Allow(ctx context.Context, key string) error
+	Remaining(ctx context.Context, key string) (int, error)
+	Reset(ctx context.Context, key string) error
+}
+
 /*
 RateLimiter implements an in-memory, per-key sliding-window rate limiter.
 It is safe for concurrent use. Keys are typically user IDs, IP addresses, or API keys.
@@ -31,6 +38,8 @@ type RateLimiter struct {
 	stopOnce sync.Once
 	done     chan struct{}
 }
+
+var _ Limiter = (*RateLimiter)(nil)
 
 /*
 NewRateLimiter creates and returns a new RateLimiter with the given config.
@@ -188,6 +197,8 @@ type RedisRateLimiter struct {
 	config    RateLimiterConfig
 	scriptSHA string
 }
+
+var _ Limiter = (*RedisRateLimiter)(nil)
 
 /*
 NewRedisRateLimiter creates and returns a new RedisRateLimiter.
