@@ -33,6 +33,7 @@ func TestErrorsAreSentinels(t *testing.T) {
 		auth.ErrOAuthNotInitialized,
 		auth.ErrOAuthExchangeFailed,
 		auth.ErrOAuthProfileFetchFailed,
+		auth.ErrOAuthInvalidState,
 	}
 
 	for i, err := range sentinels {
