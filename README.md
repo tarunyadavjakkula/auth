@@ -16,6 +16,8 @@ Auth. Works with Postgres. Supports multiple auth methods (Password, JWT, OTP), 
 * **`auth.DeletePermission(username, spaceName, role)`** - Removes a user's role in a specific space. After this, the user loses access according to that role.
 * You can also handle users with **`auth.RegisterUser()`**, **`auth.LoginUser()`**, **`auth.LoginJWT()`** and **`auth.DeleteUser()`**.
 * For roles, use **`auth.CreateRole()`** and **`auth.DeleteRole()`**.
+* **`auth.GetGoogleLoginURL(ctx)`** - Generates the Google OAuth authorization URL. Automatically creates and stores a cryptographically secure state in Redis and attaches PKCE (S256) parameters for internal CSRF and code interception protection.
+* **`auth.HandleGoogleCallback(ctx, code, state)`** - Validates the OAuth callback state against Redis with single-use replay protection, exchanges the code with the stored PKCE verifier, upserts the user, and returns a signed JWT.
 
 ## Contributing
 All Pull Requests should be sent directly to this repository (**[emmanuelmj/auth](https://github.com/emmanuelmj/auth)**), not the main `GCETOSF` org repo.

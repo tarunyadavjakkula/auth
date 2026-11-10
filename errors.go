@@ -27,4 +27,5 @@ var (
 	ErrRedisUnavailable        = errors.New("redis connection unavailable")
 	ErrRateLimitBackendDown    = errors.New("rate limit backend is down")
 	ErrSchemaOutdated          = errors.New("database schema is outdated")
+	ErrOAuthInvalidState	   = errors.New("invalid or expired oauth state")
 )
